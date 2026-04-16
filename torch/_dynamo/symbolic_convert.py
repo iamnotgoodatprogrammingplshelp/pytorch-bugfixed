@@ -4817,6 +4817,7 @@ class InstructionTranslatorBase(
         package: CompilePackage | None = None,
         # Pre-computed indexof for cache reuse
         indexof: dict[Instruction, int] | None = None,
+        debug: bool = False,
     ) -> None:
         super().__init__()
         self.speculation_log = speculation_log
@@ -4828,6 +4829,7 @@ class InstructionTranslatorBase(
         self.symbolic_globals = symbolic_globals
         self.symbolic_torch_function_state = symbolic_torch_function_state
         self.symbolic_stream_state = symbolic_stream_state
+        self.debug = debug
         # used to keep cell/freevars alive after pruning symbolic_locals (prune_dead_locals)
         # in order to generate any nested closures
         self.post_prune_cell_and_freevars = None
@@ -4958,6 +4960,7 @@ class InstructionTranslator(InstructionTranslatorBase):
         exn_vt_stack: ExceptionStack,
         distributed_state: DistributedState | None,
         package: CompilePackage | None,
+        debug: bool = False,
     ) -> None:
         _step_logger()(
             logging.INFO,
@@ -4977,6 +4980,7 @@ class InstructionTranslator(InstructionTranslatorBase):
                 torch_function_mode_stack=torch_function_mode_stack,
                 one_graph=one_graph,
                 package=package,
+                debug=debug,
             ),
             instructions=instructions,
             f_locals=f_locals,
@@ -4996,6 +5000,7 @@ class InstructionTranslator(InstructionTranslatorBase):
             exn_vt_stack=exn_vt_stack,
             distributed_state=distributed_state,
             package=package,
+            debug=debug,
         )
 
         self._throw_if_in_functorch()
