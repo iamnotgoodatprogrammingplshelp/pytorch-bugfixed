@@ -157,6 +157,7 @@ _COPY_META_FIELDS = [
     "nn_module_stack",
     "torch_fn",
     "source_fn_stack",
+    "source_info",
     "original_aten",
     "recompute",
     "ac_graph_id",

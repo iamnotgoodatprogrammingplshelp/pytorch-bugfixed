@@ -26,6 +26,7 @@ import dataclasses
 import functools
 import inspect
 import itertools
+import linecache
 import logging
 import operator
 import re
@@ -299,6 +300,46 @@ def _get_gen_rand_values_fn(random_calls: Any) -> Callable[[], list[Any]]:
         return [fn(*args, **kwargs) for fn, args, kwargs in random_calls]
 
     return _gen_rand_values
+
+
+def _build_source_info(
+    tx: "InstructionTranslatorBase", node_name: str
+) -> dict[str, Any]:
+    """
+    Build a structured source_info dict for a freshly-created FX node.
+
+    Keys:
+      filename, function_name, inline_depth, node_name — always present
+      lineno — best-available line number (Python 3.11+ uses bytecode positions)
+      end_lineno, col_offset, end_col_offset — Python 3.11+ only, may be None
+      source_line — the raw source line text (rstripped), when readable
+
+    Values mirror what Dynamo already knows at trace time; no extra I/O beyond
+    the linecache call (which is cached per file).
+    """
+    f_code = tx.f_code
+    info: dict[str, Any] = {
+        "filename": getattr(f_code, "co_filename", "<unknown>"),
+        "function_name": getattr(f_code, "co_name", "<unknown>"),
+        "inline_depth": getattr(tx, "inline_depth", 0),
+        "node_name": node_name,
+        "lineno": tx.lineno,
+    }
+    if sys.version_info >= (3, 11):
+        cur_inst = getattr(tx, "current_instruction", None)
+        positions = getattr(cur_inst, "positions", None) if cur_inst else None
+        if positions is not None:
+            if positions.lineno is not None:
+                info["lineno"] = positions.lineno
+            info["end_lineno"] = positions.end_lineno
+            info["col_offset"] = positions.col_offset
+            info["end_col_offset"] = positions.end_col_offset
+    lineno = info["lineno"]
+    if lineno is not None and info["filename"]:
+        source_line = linecache.getline(info["filename"], lineno).rstrip()
+        if source_line:
+            info["source_line"] = source_line
+    return info
 
 
 class FakeRootModule(torch.nn.Module):
@@ -3847,6 +3888,16 @@ class SubgraphTracer(fx.Tracer):
                             rv.node.meta["nn_module_stack"][target][1],
                         )
                     ]
+
+        # Structured source metadata. Complements the formatted stack_trace
+        # string with a machine-readable handle so downstream tools (error
+        # rewriters, debug UIs) don't need to reparse. Always populated for
+        # user-code ops; survives graph transformations via _COPY_META_FIELDS.
+        if (
+            kind in ("call_function", "call_method", "call_module")
+            and "source_info" not in rv.node.meta
+        ):
+            rv.node.meta["source_info"] = _build_source_info(tx, rv.node.name)
 
         if "stack_trace" not in rv.node.meta:
             frame_summaries: list[traceback.FrameSummary] = []
