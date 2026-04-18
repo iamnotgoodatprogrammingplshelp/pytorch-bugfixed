@@ -77,8 +77,8 @@ _ref_test_ops = tuple(
 # Same logic as test_cuda.py
 if not torch.backends.mps.is_available():
     print('MPS not available, skipping tests', file=sys.stderr)
-    TestCase = NoTest  # noqa: F811
-    NNTestCase = NoTest  # noqa: F811
+    TestCase = NoTest
+    NNTestCase = NoTest
 
 total_memory = int(subprocess.check_output(["sysctl", "-n", "hw.memsize"]))
 
@@ -8435,6 +8435,19 @@ class TestMPS(TestCaseMPS):
         # indicating the sampling is working properly on non-contiguous tensors
         self.assertNotEqual(len(samples), 1)
 
+    def test_multinomial_large_input_no_segfault(self):
+        # Regression test for https://github.com/pytorch/pytorch/issues/178579
+        # The previous MPSGraph kernel materialized an N x N ones matrix and
+        # segfaulted for N >= 2**17
+        # this test just checks that it doesn't segfault so we don't regress
+        n = 2**17
+        probs = torch.rand(n, device="mps")
+        out = torch.multinomial(probs, 100, replacement=True)
+        torch.mps.synchronize()
+        self.assertEqual(out.shape, torch.Size([100]))
+        self.assertEqual(out.dtype, torch.int64)
+        self.assertEqual(out.device.type, "mps")
+
     def test_cumsum_dim_check(self):
         x = torch.rand((3, 3), device="mps")
         self.assertEqual(x.cumsum(1), x.cumsum(-1))
@@ -12949,6 +12962,12 @@ class TestConsistency(TestCaseMPS):
     NEW_ALLOW_LIST_GRAD = defaultdict(list)
 
     def _run_op(self, op, mps_sample, dtype=None):
+        # MPS uses float32 intermediates for these ops, so the CPU reference
+        # must also run in float32 to avoid comparing against less-precise
+        # native half-precision CPU results.
+        if op.name in ["grid_sampler_2d", "grid_sampler_3d"] and dtype is None and mps_sample.input.dtype in [torch.float16, torch.bfloat16]:
+            dtype = torch.float32
+
         cpu_sample = transform_opinfo_sample_to_cpu(mps_sample, dtype)
 
         with warnings.catch_warnings():
@@ -12989,9 +13008,10 @@ class TestConsistency(TestCaseMPS):
                 set_seed=True):
 
             opt_dtype = None
-            # CPU implementation is less precise than MPS one so compare MPS to full fp32
-            if dtype in [torch.float16, torch.bfloat16] and op.name in ["grid_sampler_2d", "grid_sampler_3d"]:
-                opt_dtype = torch.float32
+
+            if op.name == "histc" and not dtype.is_floating_point and not dtype.is_complex:
+                opt_dtype = dtype
+
             mps_out, cpu_out, cpu_sample = self._run_op(op, mps_sample, opt_dtype)
 
             atol, rtol = self._compute_tolerances(op, dtype)
@@ -13461,6 +13481,45 @@ class TestMetalLibrary(TestCaseMPS):
         lib.do_max(z0, z1, x)
         self.assertTrue(z0.isnan().all().item(), f"results are {z0}, but all elements should have been nan")
         self.assertTrue((z1 == idx).all().item(), f"results are {z1}, but all elements should have been {idx}")
+
+    def test_reduction_utils_complex(self):
+        """Test simd_sum and simd_prod for float2 (complex64)."""
+        lib = torch.mps.compile_shader("""
+            #include <c10/metal/reduction_utils.h>
+            kernel void do_sum(device float2* out,
+                               constant float2* inp,
+                               uint idx [[thread_position_in_grid]]) {
+                out[idx] = c10::metal::simd_sum(inp[idx]);
+            }
+
+            kernel void do_prod(device float2* out,
+                                constant float2* inp,
+                                uint idx [[thread_position_in_grid]]) {
+                out[idx] = c10::metal::simd_prod(inp[idx]);
+            }
+        """)
+
+        # Test simd_sum: all 32 lanes get the same total
+        x = torch.randn(28, device="mps", dtype=torch.complex64)
+        y = torch.empty_like(x)
+        lib.do_sum(y, x)
+        x_sum = x.sum()
+        max_err = (y - x_sum).abs().max().item()
+        self.assertLess(max_err, 1e-4, f"simd_sum error {max_err}, expected {x_sum}")
+
+        # Test simd_prod: product of a few small complex numbers
+        # Use only 4 non-unit values to keep the product numerically stable
+        x_prod = torch.ones(32, device="mps", dtype=torch.complex64)
+        x_prod[0] = 1 + 2j
+        x_prod[1] = 3 - 1j
+        x_prod[2] = -1 + 1j
+        x_prod[3] = 2 + 0j
+        y_prod = torch.empty_like(x_prod)
+        lib.do_prod(y_prod, x_prod, threads=(32,), group_size=(32,))
+        expected_prod = x_prod.prod()
+        # Only lane 0 has the final result for shuffle-down reduction
+        max_err = (y_prod[0] - expected_prod).abs().item()
+        self.assertLess(max_err, 1e-4, f"simd_prod error {max_err}, expected {expected_prod}")
 
     @parametrize("dtype", [torch.float32, torch.float16, torch.int32, torch.bfloat16])
     def test_atomic_add(self, dtype):
