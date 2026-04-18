@@ -228,10 +228,15 @@ class CudnnModule(PropModule):
         torch._C._get_cudnn_benchmark, torch._C._set_cudnn_benchmark
     )
     benchmark_limit = None
+    depthwise_kernel = None
     if is_available():
         benchmark_limit = ContextProp(
             torch._C._cuda_get_cudnn_benchmark_limit,
             torch._C._cuda_set_cudnn_benchmark_limit,
+        )
+        depthwise_kernel = ContextProp(
+            torch._C._get_cudnn_depthwise_kernel,
+            torch._C._set_cudnn_depthwise_kernel,
         )
     allow_tf32 = ContextProp(
         torch._C._get_cudnn_allow_tf32, torch._C._set_cudnn_allow_tf32
@@ -240,10 +245,6 @@ class CudnnModule(PropModule):
     fp32_precision = ContextProp(
         _get_fp32_precision_getter("cuda", "all"),
         _set_fp32_precision_setter("cuda", "all"),
-    )
-    depthwise_kernel = ContextProp(
-        torch._C._get_cudnn_depthwise_kernel,
-        torch._C._set_cudnn_depthwise_kernel,
     )
 
 

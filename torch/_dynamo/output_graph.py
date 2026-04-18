@@ -3921,7 +3921,7 @@ class SubgraphTracer(fx.Tracer):
             msgs = traceback.StackSummary.from_list(filtered_frame_summaries).format()
             rv.node.stack_trace = "".join(msgs)
 
-        if self.output.debug:
+        if self.output_graph.debug:
             # Operation-Level Trace Mapping
             rv.node.meta["debug_info"] = {
                 "filename": tx.f_code.co_filename,

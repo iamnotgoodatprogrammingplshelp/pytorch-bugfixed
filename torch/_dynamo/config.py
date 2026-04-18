@@ -36,6 +36,15 @@ log_file_name: str | None = None
 # [@compile_ignored: debug] Verbose will print full stack traces on warnings and errors
 verbose = os.environ.get("TORCHDYNAMO_VERBOSE", "0") == "1"
 
+# When True, graph-break messages include a `at file:line[:col] in `<snippet>``
+# pointer derived from `source_info` (and, on Python 3.11+, an underlined
+# multi-line source preview). The structured `source_info` dict is always
+# attached to the raised `Unsupported` exception regardless of this flag.
+# [@compile_ignored: debug]
+graph_break_show_source_info = (
+    os.environ.get("TORCHDYNAMO_GRAPH_BREAK_SHOW_SOURCE_INFO", "0") == "1"
+)
+
 # [@compile_ignored: runtime_behaviour] verify the correctness of optimized backend
 verify_correctness = False
 

@@ -23,12 +23,20 @@ class TestSourceInfo(TestCase):
             return x.sin().cos() + 1
 
         gm = self._capture(fn, torch.randn(4))
-        op_nodes = [n for n in gm.graph.nodes if n.op != "placeholder" and n.op != "output"]
+        op_nodes = [
+            n for n in gm.graph.nodes if n.op != "placeholder" and n.op != "output"
+        ]
         self.assertTrue(len(op_nodes) > 0)
         for node in op_nodes:
             info = node.meta.get("source_info")
             self.assertIsNotNone(info, f"source_info missing on {node}")
-            for key in ("filename", "function_name", "inline_depth", "node_name", "lineno"):
+            for key in (
+                "filename",
+                "function_name",
+                "inline_depth",
+                "node_name",
+                "lineno",
+            ):
                 self.assertIn(key, info)
             self.assertEqual(info["node_name"], node.name)
             self.assertEqual(info["function_name"], "fn")
@@ -45,7 +53,8 @@ class TestSourceInfo(TestCase):
         source_lines = {
             n.meta["source_info"].get("source_line", "")
             for n in gm.graph.nodes
-            if n.op == "call_function" and "source_info" in n.meta
+            if n.op in ("call_function", "call_method", "call_module")
+            and "source_info" in n.meta
         }
         joined = "\n".join(source_lines)
         self.assertIn("x.sin()", joined)
@@ -75,7 +84,8 @@ class TestSourceInfo(TestCase):
         infos = [
             n.meta["source_info"]
             for n in gm.graph.nodes
-            if n.op == "call_function" and "source_info" in n.meta
+            if n.op in ("call_function", "call_method", "call_module")
+            and "source_info" in n.meta
         ]
         self.assertTrue(infos, "expected at least one call_function node")
         depths = {info["inline_depth"] for info in infos}

@@ -37,6 +37,7 @@ from pathlib import Path
 from traceback import extract_stack, format_exc, format_list, FrameSummary, StackSummary
 from typing import Any, NoReturn, TYPE_CHECKING
 
+import torch._dynamo.config
 import torch._guards
 from torch._utils_internal import get_file_path_2
 
@@ -215,6 +216,7 @@ class Unsupported(TorchDynamoException):
         *,
         case_name: str | None = None,
         real_stack: StackSummary | None = None,
+        source_info: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(msg)
         if not real_stack:
@@ -226,6 +228,7 @@ class Unsupported(TorchDynamoException):
         self.add_to_stats()
         self.gb_type: str | None = gb_type
         self.logged = False
+        self.source_info: dict[str, Any] | None = source_info
 
     def remove_from_stats(self) -> None:
         assert self.category is not None
@@ -617,6 +620,84 @@ def get_gbid_documentation_link(gb_type: str) -> str | None:
 _NOTHING = object()
 
 
+def _try_get_graph_break_source_info() -> dict[str, Any] | None:
+    """Build a source_info dict for the current Dynamo tracing frame, if any.
+
+    Uses the thread-local InstructionTranslator so we don't need to thread `tx`
+    through every `unimplemented()` call site. Returns None if tracing is not
+    active (e.g. call happened from a non-Dynamo path).
+    """
+    try:
+        from torch._dynamo.symbolic_convert import InstructionTranslator
+
+        tx = InstructionTranslator.current_tx()
+    except (AttributeError, ImportError):
+        return None
+    if tx is None:
+        return None
+    f_code = getattr(tx, "f_code", None)
+    if f_code is None:
+        return None
+    info: dict[str, Any] = {
+        "filename": getattr(f_code, "co_filename", "<unknown>"),
+        "function_name": getattr(f_code, "co_name", "<unknown>"),
+        "inline_depth": getattr(tx, "inline_depth", 0),
+        "lineno": getattr(tx, "lineno", None),
+    }
+    import sys as _sys
+
+    if _sys.version_info >= (3, 11):
+        cur_inst = getattr(tx, "current_instruction", None)
+        positions = getattr(cur_inst, "positions", None) if cur_inst else None
+        if positions is not None:
+            if positions.lineno is not None:
+                info["lineno"] = positions.lineno
+            info["end_lineno"] = positions.end_lineno
+            info["col_offset"] = positions.col_offset
+            info["end_col_offset"] = positions.end_col_offset
+    lineno = info.get("lineno")
+    if lineno is not None and info.get("filename"):
+        import linecache as _linecache
+
+        source_line = _linecache.getline(info["filename"], lineno).rstrip()
+        if source_line:
+            info["source_line"] = source_line
+    return info
+
+
+def _format_graph_break_source_pointer(source_info: dict[str, Any]) -> str:
+    """Format a `at file:line[:col] in \\`snippet\\`` pointer and (on 3.11+) an
+    underlined multi-line source preview for inclusion in graph-break messages.
+    """
+    import sys as _sys
+
+    filename = source_info.get("filename") or "<unknown>"
+    lineno = source_info.get("lineno")
+    if lineno is None:
+        return ""
+    col = source_info.get("col_offset")
+    location = f"{filename}:{lineno}"
+    if col is not None:
+        location += f":{col}"
+    snippet = (source_info.get("source_line") or "").strip()
+    pointer = f"at {location}" + (f" in `{snippet}`" if snippet else "")
+
+    if _sys.version_info >= (3, 11):
+        try:
+            from torch._dynamo.symbolic_convert import InstructionTranslator
+            from torch._dynamo.utils import get_instruction_source_311
+
+            tx = InstructionTranslator.current_tx()
+            inst = getattr(tx, "current_instruction", None) if tx else None
+            if tx is not None and inst is not None and inst.positions is not None:
+                rendered = get_instruction_source_311(tx.f_code, inst)
+                if rendered:
+                    pointer += "\n" + rendered
+        except Exception:
+            pass
+    return pointer
+
+
 def unimplemented(
     *,
     gb_type: str,
@@ -639,6 +720,12 @@ def unimplemented(
 
     msg = format_graph_break_message(gb_type, context, explanation, hints)
 
+    source_info = _try_get_graph_break_source_info()
+    if source_info and torch._dynamo.config.graph_break_show_source_info:
+        pointer = _format_graph_break_source_pointer(source_info)
+        if pointer:
+            msg += f"\n\n  {pointer}"
+
     tracing_ctx = torch._guards.TracingContext.try_get()
     if tracing_ctx and getattr(tracing_ctx, "debug", False):
         msg += "\n\n[DCL DEBUG] Graph break detailed info:\n"
@@ -655,13 +742,23 @@ def unimplemented(
         if isinstance(from_exc, Unsupported):
             msg = f"{from_exc.msg}\n\n*** While handling this graph break, another graph break occurred: ***\n\n{msg}"
             # noqa: GB_REGISTRY
-            raise Unsupported(msg, gb_type, skip_frame, real_stack=past_real_stack)
+            raise Unsupported(
+                msg,
+                gb_type,
+                skip_frame,
+                real_stack=past_real_stack,
+                source_info=source_info,
+            )
         # noqa: GB_REGISTRY
         raise Unsupported(
-            msg, gb_type, skip_frame, real_stack=past_real_stack
+            msg,
+            gb_type,
+            skip_frame,
+            real_stack=past_real_stack,
+            source_info=source_info,
         ) from from_exc
     # noqa: GB_REGISTRY
-    raise Unsupported(msg, gb_type, skip_frame)
+    raise Unsupported(msg, gb_type, skip_frame, source_info=source_info)
 
 
 # KeyError has special handling for its args

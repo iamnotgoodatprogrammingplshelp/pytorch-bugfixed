@@ -68,11 +68,29 @@ class LoweringException(OperatorIssue):
         args: list[Any],
         kwargs: dict[str, Any],
         stack_trace: str | None = None,
+        source_info: dict[str, Any] | None = None,
     ) -> None:
         msg = f"{type(exc).__name__}: {exc}\n{self.operator_str(target, args, kwargs)}"
+        if source_info:
+            pointer = _format_source_info_pointer(source_info)
+            if pointer:
+                msg += f"\n  {pointer}"
         if stack_trace:
             msg += f"{msg}\nFound from : \n {stack_trace}"
         super().__init__(msg)
+
+
+def _format_source_info_pointer(source_info: dict[str, Any]) -> str:
+    """Format a single-line `at file:LN in \\`snippet\\`` pointer from source_info."""
+    filename = source_info.get("filename") or "<unknown>"
+    lineno = source_info.get("lineno")
+    if lineno is None:
+        return ""
+    base = f"at {filename}:{lineno}"
+    snippet = source_info.get("source_line", "").strip()
+    if snippet:
+        base += f" in `{snippet}`"
+    return base
 
 
 class SubgraphLoweringException(RuntimeError):

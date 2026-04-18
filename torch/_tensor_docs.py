@@ -7,7 +7,14 @@ from torch._torch_docs import parse_kwargs, reproducibility_notes
 
 
 def add_docstr_all(method: str, docstr: str) -> None:
-    add_docstr(getattr(torch._C.TensorBase, method), docstr)
+    # Tolerate missing attributes: docstrings may list methods whose C++
+    # bindings aren't present in the current build (e.g. CPU-only builds,
+    # or out-of-sync autograd codegen). Skipping is safer than a hard
+    # import failure.
+    target = getattr(torch._C.TensorBase, method, None)
+    if target is None:
+        return
+    add_docstr(target, docstr)
 
 
 common_args = parse_kwargs(

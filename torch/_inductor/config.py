@@ -234,6 +234,13 @@ nan_asserts = os.environ.get("TORCHINDUCTOR_NAN_ASSERTS") == "1"
 runtime_triton_nan_asserts = (
     os.environ.get("TORCHINDUCTOR_RUNTIME_TRITON_NAN_ASSERTS") == "1"
 )
+# When True (requires `nan_asserts` to be set), emit assertion messages on
+# kernel outputs that include a user-code pointer derived from the structured
+# `source_info` metadata Dynamo attaches to FX nodes. Helps attribute a NaN
+# to the line of user code that produced it.
+nan_asserts_show_source_info = (
+    os.environ.get("TORCHINDUCTOR_NAN_ASSERTS_SHOW_SOURCE_INFO") == "1"
+)
 scalar_asserts = os.environ.get("TORCHINDUCTOR_SCALAR_ASSERTS", "1") == "1"
 
 # Disable by default in fbcode

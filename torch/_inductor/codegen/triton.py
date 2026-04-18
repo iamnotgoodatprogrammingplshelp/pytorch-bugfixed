@@ -6054,6 +6054,11 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
     def codegen_nan_check(self) -> None:
         wrapper = V.graph.wrapper_code
         _, call_args, arg_signatures, _ = self.args.python_argdefs()
+        source_hint = (
+            self._source_info_hint_for_nan_check()
+            if config.nan_asserts_show_source_info
+            else ""
+        )
         for arg, arg_signature in zip(call_args, arg_signatures):
             if isinstance(arg_signature, TensorArg):
                 if V.graph.cpp_wrapper:
@@ -6061,10 +6066,47 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
                         f'AOTI_TORCH_ERROR_CODE_CHECK(aoti_torch_check_inf_and_nan("{arg}", {arg}));'
                     )
                 else:
-                    line = f"assert not {arg}.isnan().any().item()"
-                    wrapper.writeline(line)
-                    line = f"assert not {arg}.isinf().any().item()"
-                    wrapper.writeline(line)
+                    if source_hint:
+                        msg = f"NaN in {arg} {source_hint}"
+                        wrapper.writeline(
+                            f"assert not {arg}.isnan().any().item(), {msg!r}"
+                        )
+                        msg = f"Inf in {arg} {source_hint}"
+                        wrapper.writeline(
+                            f"assert not {arg}.isinf().any().item(), {msg!r}"
+                        )
+                    else:
+                        wrapper.writeline(f"assert not {arg}.isnan().any().item()")
+                        wrapper.writeline(f"assert not {arg}.isinf().any().item()")
+
+    def _source_info_hint_for_nan_check(self) -> str:
+        """Return a short `(from user code at file:LN `<snippet>`)` hint built
+        from source_info on the scheduler nodes contributing to this kernel.
+        Empty string if no source_info is available."""
+        features = getattr(self, "features", None)
+        if features is None:
+            return ""
+        try:
+            scheduler_nodes = list(features.scheduler_nodes())
+        except Exception:
+            return ""
+        for node in scheduler_nodes:
+            ir_node = getattr(node, "node", None)
+            if ir_node is None:
+                continue
+            getter = getattr(ir_node, "get_source_infos", None)
+            if getter is None:
+                continue
+            infos = getter()
+            for info in infos:
+                filename = info.get("filename")
+                lineno = info.get("lineno")
+                if not filename or lineno is None:
+                    continue
+                snippet = (info.get("source_line") or "").strip()
+                base = f"(from user code at {filename}:{lineno}"
+                return base + (f" `{snippet}`)" if snippet else ")")
+        return ""
 
     def create_cse_var(self, *args, **kwargs) -> TritonCSEVariable:
         return TritonCSEVariable(*args, **kwargs)

@@ -671,6 +671,28 @@ class IRNode:
                         stack_traces.add(stack_trace)
         return stack_traces
 
+    def get_source_infos(self) -> list[dict[str, Any]]:
+        """Return structured source_info dicts for origin FX nodes, if present.
+
+        Populated by Dynamo on call_function/call_method/call_module nodes and
+        propagated through fx transformations via _COPY_META_FIELDS. Useful for
+        error messages that want a file:line pointer to user code.
+        """
+        infos: list[dict[str, Any]] = []
+        origins = self.origins
+        if isinstance(self, ExternKernel):
+            origin_node = self.get_origin_node()
+            if self.origin_node:
+                origins = OrderedSet([origin_node])
+        for node in origins:
+            meta = getattr(node, "meta", None)
+            if meta is None:
+                continue
+            info = meta.get("source_info")
+            if info:
+                infos.append(info)
+        return infos
+
     def common_repr(self, shorten: bool = True) -> Sequence[str]:
         origins = f"origins={getattr(self, 'origins', '')}"
         if shorten and len(origins) > 64:

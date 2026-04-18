@@ -1464,6 +1464,7 @@ class GraphLowering(torch.fx.Interpreter):
             return out
         except Exception as e:
             stack_trace = None
+            source_info = None
             if (
                 hasattr(self, "current_node")
                 and self.current_node is not None
@@ -1471,8 +1472,14 @@ class GraphLowering(torch.fx.Interpreter):
                 and self.current_node.meta is not None
             ):
                 stack_trace = self.current_node.meta.get("stack_trace", None)
+                source_info = self.current_node.meta.get("source_info", None)
             raise LoweringException(
-                e, target, args, kwargs, stack_trace=stack_trace
+                e,
+                target,
+                args,
+                kwargs,
+                stack_trace=stack_trace,
+                source_info=source_info,
             ).with_traceback(e.__traceback__) from None
 
     @staticmethod
